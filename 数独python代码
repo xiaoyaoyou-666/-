@@ -1,0 +1,363 @@
+import random
+import tkinter as tk
+from tkinter import messagebox, ttk
+from typing import Optional, Tuple
+
+# ── 核心逻辑 ─────────────────────────────────────────────
+
+class SudokuBoard:
+    def __init__(self):
+        self.board = [[0] * 9 for _ in range(9)]
+        self.solution = [[0] * 9 for _ in range(9)]
+
+    def _candidates(self, board, row, col):
+        used = set()
+        for i in range(9):
+            if board[row][i]:
+                used.add(board[row][i])
+            if board[i][col]:
+                used.add(board[i][col])
+        br, bc = (row // 3) * 3, (col // 3) * 3
+        for i in range(3):
+            for j in range(3):
+                v = board[br + i][bc + j]
+                if v:
+                    used.add(v)
+        return [n for n in range(1, 10) if n not in used]
+
+    def _find_empty(self, board):
+        best, best_cells = 10, []
+        has_empty = False
+        for r in range(9):
+            for c in range(9):
+                if board[r][c] == 0:
+                    has_empty = True
+                    cands = self._candidates(board, r, c)
+                    n = len(cands)
+                    if n == 0:
+                        return -2, -2, []
+                    if n < best:
+                        best, best_cells = n, [(r, c, cands)]
+                    elif n == best:
+                        best_cells.append((r, c, cands))
+        if not has_empty:
+            return -1, -1, []
+        r, c, cands = random.choice(best_cells)
+        return r, c, cands
+
+    def _solve(self, board) -> bool:
+        r, c, cands = self._find_empty(board)
+        if r == -1:
+            return True
+        if r == -2:
+            return False
+        random.shuffle(cands)
+        for num in cands:
+            board[r][c] = num
+            if self._solve(board):
+                return True
+            board[r][c] = 0
+        return False
+
+    def _count_solutions(self, board, limit=2) -> int:
+        r, c, cands = self._find_empty(board)
+        if r == -1:
+            return 1
+        if r == -2:
+            return 0
+        count = 0
+        for num in cands:
+            board[r][c] = num
+            count += self._count_solutions(board, limit - count)
+            board[r][c] = 0
+            if count >= limit:
+                return count
+        return count
+
+    def generate(self, clues: int):
+        to_remove = 81 - clues
+        best_removed = -1
+        for attempt in range(3):
+            puzzle = [[0] * 9 for _ in range(9)]
+            self._solve(puzzle)
+            full = [row[:] for row in puzzle]
+            removed = self._remove_cells(puzzle, to_remove)
+            if removed > best_removed:
+                best_removed = removed
+                self.board = [row[:] for row in puzzle]
+                self.solution = [row[:] for row in full]
+            if removed >= to_remove - 2:
+                break
+
+    def _remove_cells(self, board, to_remove):
+        candidates = [(r, c) for r in range(9) for c in range(9)]
+        random.shuffle(candidates)
+        removed = 0
+        for r, c in candidates:
+            if removed >= to_remove:
+                break
+            backup = board[r][c]
+            board[r][c] = 0
+            test = [row[:] for row in board]
+            if self._count_solutions(test) == 1:
+                removed += 1
+            else:
+                board[r][c] = backup
+        return removed
+
+    def check_move(self, row: int, col: int, num: int) -> bool:
+        return self.solution[row][col] == num
+
+    def is_complete(self) -> bool:
+        return all(self.board[r][c] == self.solution[r][c]
+                   for r in range(9) for c in range(9))
+
+
+# ── 难度配置 ─────────────────────────────────────────────
+
+DIFFICULTIES = {
+    "简单": 38,
+    "中等": 30,
+    "困难": 25,
+    "专家": 22,
+}
+
+# ── GUI ──────────────────────────────────────────────────
+
+FONT_DIGITS = ("Consolas", 22, "bold")
+FONT_BTN = ("微软雅黑", 12)
+
+COLOR_BG = "#f0f4f8"
+COLOR_GRID_BG = "#ffffff"
+COLOR_FIXED = "#1a1a2e"
+COLOR_USER = "#4361ee"
+COLOR_HINT = "#06d6a0"
+COLOR_ERROR = "#ef476f"
+COLOR_BORDER = "#333333"
+
+
+class SudokuGUI:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title("数独 · Sudoku")
+        self.root.configure(bg=COLOR_BG)
+        self.root.resizable(False, False)
+
+        self.difficulty = tk.StringVar(value="中等")
+        self.board_data = SudokuBoard()
+        self.cells: list[list[Optional[tk.Entry]]] = [[None] * 9 for _ in range(9)]
+        self.fixed = [[False] * 9 for _ in range(9)]
+        self.user_values = [[0] * 9 for _ in range(9)]
+        self.error_cells: set[Tuple[int, int]] = set()
+
+        self._build_ui()
+        self.new_game()
+        self.root.mainloop()
+
+    def _build_ui(self):
+        # ── 顶部控制栏 ──
+        top = tk.Frame(self.root, bg=COLOR_BG)
+        top.pack(pady=(16, 10))
+
+        tk.Label(top, text="难度：", bg=COLOR_BG,
+                 font=FONT_BTN).pack(side=tk.LEFT)
+        diff_menu = ttk.Combobox(top, textvariable=self.difficulty,
+                                 values=list(DIFFICULTIES.keys()),
+                                 state="readonly", width=8, font=FONT_BTN)
+        diff_menu.pack(side=tk.LEFT, padx=(0, 10))
+
+        for text, cmd in [("新游戏", self.new_game),
+                          ("提示", self.give_hint),
+                          ("检查", self.check_board),
+                          ("重置", self.reset_board)]:
+            btn = tk.Button(top, text=text, font=FONT_BTN,
+                            bg="#ffffff", relief=tk.RIDGE,
+                            command=cmd, padx=10, cursor="hand2")
+            btn.pack(side=tk.LEFT, padx=4)
+
+        # ── 数独网格 ──
+        self.grid_frame = tk.Frame(self.root, bg=COLOR_BORDER, bd=2)
+        self.grid_frame.pack(padx=20, pady=(6, 20))
+
+        for r in range(9):
+            for c in range(9):
+                sub_r, sub_c = r % 3, c % 3
+                pad = {}
+                if sub_r == 0:
+                    pad["pady"] = (2, 0)
+                elif sub_r == 2:
+                    pad["pady"] = (0, 2)
+                else:
+                    pad["pady"] = (0, 0)
+                if sub_c == 0:
+                    pad["padx"] = (2, 0)
+                elif sub_c == 2:
+                    pad["padx"] = (0, 2)
+                else:
+                    pad["padx"] = (0, 0)
+
+                entry = tk.Entry(self.grid_frame, width=2,
+                                 font=FONT_DIGITS,
+                                 justify="center",
+                                 bg=COLOR_GRID_BG,
+                                 fg=COLOR_USER,
+                                 relief=tk.FLAT,
+                                 bd=0,
+                                 highlightthickness=0)
+                entry.grid(row=r, column=c, **pad)
+                entry.bind("<KeyRelease>", lambda e, rr=r, cc=c: self._on_key(rr, cc, e))
+                entry.bind("<FocusIn>", lambda e, rr=r, cc=c: self._on_focus(rr, cc))
+                self.cells[r][c] = entry
+
+        # ── 底部信息 ──
+        self.status_label = tk.Label(self.root, text="",
+                                     bg=COLOR_BG, font=("微软雅黑", 11),
+                                     fg="#555555")
+        self.status_label.pack(pady=(0, 12))
+
+    # ── 游戏逻辑 ──
+
+    def new_game(self):
+        diff = self.difficulty.get()
+        clues = DIFFICULTIES[diff]
+        self.board_data.generate(clues)
+        self.user_values = [[0] * 9 for _ in range(9)]
+        self.fixed = [[False] * 9 for _ in range(9)]
+        self.error_cells.clear()
+
+        for r in range(9):
+            for c in range(9):
+                val = self.board_data.board[r][c]
+                entry = self.cells[r][c]
+                entry.config(state=tk.NORMAL)
+                if val != 0:
+                    entry.delete(0, tk.END)
+                    entry.insert(0, str(val))
+                    entry.config(fg=COLOR_FIXED, state=tk.DISABLED)
+                    self.fixed[r][c] = True
+                    self.user_values[r][c] = val
+                else:
+                    entry.delete(0, tk.END)
+                    entry.config(fg=COLOR_USER, state=tk.NORMAL)
+                    self.fixed[r][c] = False
+                    self.user_values[r][c] = 0
+
+        self.status_label.config(text=f"难度：{diff} · 共 {clues} 个已知数")
+
+    def reset_board(self):
+        for r in range(9):
+            for c in range(9):
+                if not self.fixed[r][c]:
+                    self.cells[r][c].delete(0, tk.END)
+                    self.cells[r][c].config(fg=COLOR_USER, bg=COLOR_GRID_BG)
+                    self.user_values[r][c] = 0
+        self.error_cells.clear()
+        self.status_label.config(text="已重置")
+
+    def give_hint(self):
+        empties = [(r, c) for r in range(9) for c in range(9)
+                   if not self.fixed[r][c] and self.user_values[r][c] == 0]
+        if not empties:
+            return
+
+        target = random.choice(empties)
+        r, c = target
+        correct = self.board_data.solution[r][c]
+        entry = self.cells[r][c]
+        entry.delete(0, tk.END)
+        entry.insert(0, str(correct))
+        entry.config(fg=COLOR_HINT, state=tk.DISABLED)
+        self.fixed[r][c] = True
+        self.user_values[r][c] = correct
+
+        if r in [e[0] for e in self.error_cells]:
+            self.error_cells = {(er, ec) for er, ec in self.error_cells
+                                if not (er == r and ec == c)}
+            entry.config(bg=COLOR_GRID_BG)
+
+        self.status_label.config(text=f"提示：第 {r+1} 行 第 {c+1} 列 = {correct}")
+
+        if self.board_data.is_complete():
+            self._show_win()
+
+    def check_board(self):
+        errors = 0
+        self.error_cells.clear()
+        for r in range(9):
+            for c in range(9):
+                entry = self.cells[r][c]
+                if self.fixed[r][c]:
+                    entry.config(bg=COLOR_GRID_BG)
+                    continue
+                val_str = entry.get().strip()
+                if val_str == "":
+                    continue
+                try:
+                    num = int(val_str)
+                except ValueError:
+                    num = 0
+                if not (1 <= num <= 9) or not self.board_data.check_move(r, c, num):
+                    entry.config(bg="#fee2e2")
+                    self.error_cells.add((r, c))
+                    errors += 1
+                else:
+                    entry.config(bg=COLOR_GRID_BG)
+
+        if errors == 0:
+            if self.board_data.is_complete():
+                self._show_win()
+            else:
+                self.status_label.config(text="当前填写全部正确 ✅ 继续加油！")
+        else:
+            self.status_label.config(text=f"发现 {errors} 处错误（已标红）")
+
+    def _show_win(self):
+        messagebox.showinfo("🎉 恭喜！", "你完成了这个数独！\n点击「新游戏」挑战下一局。")
+
+    # ── 事件处理 ──
+
+    def _on_focus(self, row, col):
+        self._clear_error(row, col)
+
+    def _on_key(self, row, col, event):
+        if self.fixed[row][col]:
+            return
+        val_str = self.cells[row][col].get().strip()
+        if val_str == "":
+            self.user_values[row][col] = 0
+            self.cells[row][col].config(fg=COLOR_USER)
+            self._clear_error(row, col)
+            return
+
+        if not val_str.isdigit() or not (1 <= int(val_str) <= 9):
+            self.cells[row][col].delete(0, tk.END)
+            return
+
+        num = int(val_str)
+        self.user_values[row][col] = num
+        self.cells[row][col].config(fg=COLOR_USER)
+        self._clear_error(row, col)
+
+        # 自动跳到下一个格子
+        if event.keysym not in ("Tab", "BackSpace", "Delete", "Left", "Right", "Up", "Down"):
+            self._focus_next(row, col)
+
+    def _focus_next(self, row, col):
+        for c in range(col + 1, 9):
+            if not self.fixed[row][c]:
+                self.cells[row][c].focus()
+                return
+        for r in range(row + 1, 9):
+            for c in range(9):
+                if not self.fixed[r][c]:
+                    self.cells[r][c].focus()
+                    return
+
+    def _clear_error(self, row, col):
+        if (row, col) in self.error_cells:
+            self.error_cells.discard((row, col))
+            self.cells[row][col].config(bg=COLOR_GRID_BG)
+
+
+if __name__ == "__main__":
+    SudokuGUI()
